@@ -93,10 +93,9 @@ namespace NetflixHouseholdConfirmator
             }
             catch (Exception chromeException)
             {
-                Console.Error.WriteLine(
-                    $"Failed to initialise Chrome with custom server flags. Falling back to default WebDriver initialiser. {chromeException.Message}");
-
-                return WebDriverInitialiser.InitialiseAvailableWebDriver(debugSettings.IsDebugMode, botSettings.PageLoadTimeout);
+                throw new InvalidOperationException(
+                    "Failed to initialise Chrome WebDriver with server-safe options. Check /tmp/chromedriver.log for driver details.",
+                    chromeException);
             }
         }
 
@@ -122,7 +121,9 @@ namespace NetflixHouseholdConfirmator
             options.AddArgument("--disable-background-networking");
             options.AddArgument("--disable-extensions");
             options.AddArgument("--window-size=1920,1080");
-            options.AddArgument("--remote-debugging-pipe");
+            options.AddArgument("--no-first-run");
+            options.AddArgument("--no-default-browser-check");
+            options.AddArgument("--remote-debugging-port=9222");
 
             string profileDirectory = Path.Combine(Path.GetTempPath(), "netflix-household-confirmator-chrome-profile");
             Directory.CreateDirectory(profileDirectory);
@@ -130,10 +131,11 @@ namespace NetflixHouseholdConfirmator
 
             if (!debugSettings.IsDebugMode)
             {
-                options.AddArgument("--headless=new");
+                options.AddArgument("--headless");
             }
 
             string browserBinaryPath = GetFirstExistingPath(
+                "/snap/chromium/current/usr/lib/chromium-browser/chrome",
                 "/snap/bin/chromium",
                 "/usr/bin/chromium-browser",
                 "/usr/bin/chromium",
