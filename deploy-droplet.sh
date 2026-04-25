@@ -5,6 +5,7 @@ APP_NAME="netflix-household-confirmator"
 APP_USER="${APP_USER:-netflixbot}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/${APP_NAME}}"
 LOG_DIR="${LOG_DIR:-/var/log/${APP_NAME}}"
+RUNTIME_DIR="${RUNTIME_DIR:-/tmp/runtime-${APP_USER}}"
 SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
 PUBLISH_DIR=".publish"
 
@@ -229,6 +230,7 @@ Restart=always
 RestartSec=10
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin
 Environment=HOME=/home/${APP_USER}
+Environment=XDG_RUNTIME_DIR=${RUNTIME_DIR}
 
 [Install]
 WantedBy=multi-user.target
@@ -268,14 +270,15 @@ main() {
   dotnet restore
   dotnet publish -c Release -o "${PUBLISH_DIR}"
 
-  mkdir -p "${INSTALL_DIR}" "${LOG_DIR}"
+  mkdir -p "${INSTALL_DIR}" "${LOG_DIR}" "${RUNTIME_DIR}"
   cp -a "${PUBLISH_DIR}/." "${INSTALL_DIR}/"
 
   write_appsettings
   write_service
 
-  chown -R "${APP_USER}:${APP_USER}" "${INSTALL_DIR}" "${LOG_DIR}"
+  chown -R "${APP_USER}:${APP_USER}" "${INSTALL_DIR}" "${LOG_DIR}" "${RUNTIME_DIR}"
   chmod 750 "${INSTALL_DIR}" "${LOG_DIR}"
+  chmod 700 "${RUNTIME_DIR}"
 
   systemctl daemon-reload
   systemctl enable --now "${APP_NAME}.service"

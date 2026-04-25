@@ -10,6 +10,7 @@ using NetflixHouseholdConfirmator.Service;
 using NetflixHouseholdConfirmator.Service.Processors;
 
 using OpenQA.Selenium;
+using OpenQA.Selenium.Chrome;
 using NuciLog;
 using NuciLog.Configuration;
 using NuciLog.Core;
@@ -36,7 +37,7 @@ namespace NetflixHouseholdConfirmator
             LoadConfiguration();
             ValidateConfiguration();
 
-            webDriver = WebDriverInitialiser.InitialiseAvailableWebDriver(debugSettings.IsDebugMode, botSettings.PageLoadTimeout);
+            webDriver = InitialiseWebDriverSafely();
 
             serviceProvider = CreateIOC();
             logger = serviceProvider.GetRequiredService<ILogger>();
@@ -82,6 +83,84 @@ namespace NetflixHouseholdConfirmator
 
                 logger?.Info(Operation.ShutDown, "The service has stopped.");
             }
+        }
+
+        static IWebDriver InitialiseWebDriverSafely()
+        {
+            try
+            {
+                return InitialiseChromeWebDriver();
+            }
+            catch (Exception chromeException)
+            {
+                Console.Error.WriteLine(
+                    $"Failed to initialise Chrome with custom server flags. Falling back to default WebDriver initialiser. {chromeException.Message}");
+
+                return WebDriverInitialiser.InitialiseAvailableWebDriver(debugSettings.IsDebugMode, botSettings.PageLoadTimeout);
+            }
+        }
+
+        static IWebDriver InitialiseChromeWebDriver()
+        {
+            string driverPath = GetFirstExistingPath(
+                "/usr/local/bin/chromedriver",
+                "/usr/bin/chromedriver");
+
+            ChromeDriverService driverService = string.IsNullOrWhiteSpace(driverPath)
+                ? ChromeDriverService.CreateDefaultService()
+                : ChromeDriverService.CreateDefaultService(Path.GetDirectoryName(driverPath), Path.GetFileName(driverPath));
+
+            driverService.HideCommandPromptWindow = true;
+            driverService.EnableVerboseLogging = true;
+            driverService.LogPath = Path.Combine(Path.GetTempPath(), "chromedriver.log");
+
+            ChromeOptions options = new();
+            options.AddArgument("--no-sandbox");
+            options.AddArgument("--disable-dev-shm-usage");
+            options.AddArgument("--disable-gpu");
+            options.AddArgument("--disable-software-rasterizer");
+            options.AddArgument("--disable-background-networking");
+            options.AddArgument("--disable-extensions");
+            options.AddArgument("--window-size=1920,1080");
+            options.AddArgument("--remote-debugging-pipe");
+
+            string profileDirectory = Path.Combine(Path.GetTempPath(), "netflix-household-confirmator-chrome-profile");
+            Directory.CreateDirectory(profileDirectory);
+            options.AddArgument($"--user-data-dir={profileDirectory}");
+
+            if (!debugSettings.IsDebugMode)
+            {
+                options.AddArgument("--headless=new");
+            }
+
+            string browserBinaryPath = GetFirstExistingPath(
+                "/snap/bin/chromium",
+                "/usr/bin/chromium-browser",
+                "/usr/bin/chromium",
+                "/usr/bin/google-chrome",
+                "/usr/bin/google-chrome-stable");
+
+            if (!string.IsNullOrWhiteSpace(browserBinaryPath))
+            {
+                options.BinaryLocation = browserBinaryPath;
+            }
+
+            TimeSpan commandTimeout = TimeSpan.FromSeconds(Math.Max(botSettings.PageLoadTimeout, 60));
+
+            return new ChromeDriver(driverService, options, commandTimeout);
+        }
+
+        static string GetFirstExistingPath(params string[] candidatePaths)
+        {
+            foreach (string candidatePath in candidatePaths)
+            {
+                if (File.Exists(candidatePath))
+                {
+                    return candidatePath;
+                }
+            }
+
+            return null;
         }
 
         static IConfiguration LoadConfiguration()
