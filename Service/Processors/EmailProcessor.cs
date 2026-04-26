@@ -22,6 +22,21 @@ namespace NetflixHouseholdConfirmator.Service.Processors
     {
         const string HouseholdUpdateSubject = "How to update your Netflix Household";
         const string ConfirmationUrlToken = "UPDATE_HOUSEHOLD_REQUESTED_OTP_CTA";
+        static readonly IDictionary<string, int> EnglishMonthNumbers = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["January"] = 1,
+            ["February"] = 2,
+            ["March"] = 3,
+            ["April"] = 4,
+            ["May"] = 5,
+            ["June"] = 6,
+            ["July"] = 7,
+            ["August"] = 8,
+            ["September"] = 9,
+            ["October"] = 10,
+            ["November"] = 11,
+            ["December"] = 12
+        };
         static readonly string[] HouseholdUrlHints =
         [
             "household",
@@ -162,36 +177,43 @@ namespace NetflixHouseholdConfirmator.Service.Processors
                 OperationStatus.InProgress,
                 $"Scanned {emails.Count} recent inbox email(s).");
 
-            MimeMessage email = emails.FirstOrDefault(IsPotentialNetflixHouseholdEmail);
+            HouseholdEmailCandidate candidate = emails
+                .Where(IsPotentialNetflixHouseholdEmail)
+                .Select(CreateHouseholdEmailCandidate)
+                .OrderByDescending(candidate => candidate.SortDate)
+                .ThenByDescending(candidate => candidate.Email.Date.UtcDateTime)
+                .FirstOrDefault();
 
-            if (email is null)
+            if (candidate is null)
             {
                 return null;
             }
 
-            string confirmationUrl = ExtractConfirmationUrlFromEmail(email);
-            string emailId = GetEmailIdentity(email, confirmationUrl);
-
-            if (processedEmailIds.Contains(emailId))
+            if (processedEmailIds.Contains(candidate.EmailIdentity))
             {
                 return null;
             }
 
-            processedEmailIds.Add(emailId);
+            processedEmailIds.Add(candidate.EmailIdentity);
 
             IEnumerable<LogInfo> logInfos =
             [
-                new(MyLogInfoKey.EmailDate, email.Date.ToString("O")),
-                new(MyLogInfoKey.EmailIdentity, emailId)
+                new(MyLogInfoKey.EmailDate, candidate.Email.Date.ToString("O")),
+                new(MyLogInfoKey.EmailIdentity, candidate.EmailIdentity)
             ];
+
+            if (!string.IsNullOrWhiteSpace(candidate.RequestedAt))
+            {
+                logInfos = logInfos.Append(new(MyLogInfoKey.RequestedAt, candidate.RequestedAt));
+            }
 
             logger.Info(
                 MyOperation.ListenForConfirmationRequests,
                 OperationStatus.InProgress,
-                $"Found latest Netflix household email. Subject: {email.Subject}",
+                $"Found latest Netflix household email. Subject: {candidate.Email.Subject}",
                 logInfos);
 
-            if (!string.IsNullOrWhiteSpace(confirmationUrl))
+            if (!string.IsNullOrWhiteSpace(candidate.ConfirmationUrl))
             {
                 logger.Info(
                     MyOperation.ListenForConfirmationRequests,
@@ -199,22 +221,44 @@ namespace NetflixHouseholdConfirmator.Service.Processors
                     "Extracted a Netflix household confirmation URL.",
                     logInfos);
 
-                return confirmationUrl;
+                return candidate.ConfirmationUrl;
             }
 
             logger.Error(
                 MyOperation.ListenForConfirmationRequests,
                 OperationStatus.Failure,
-                $"Matched the latest Netflix household email but could not extract a valid confirmation URL. Subject: {email.Subject}",
+                $"Matched the latest Netflix household email but could not extract a valid confirmation URL. Subject: {candidate.Email.Subject}",
                 logInfos);
 
             return null;
         }
 
-        private string ExtractConfirmationUrlFromEmail(MimeMessage email)
+        HouseholdEmailCandidate CreateHouseholdEmailCandidate(MimeMessage email)
         {
-            string content = $"{email.HtmlBody}\n{email.TextBody}";
+            string content = GetEmailContent(email);
+            string confirmationUrl = ExtractConfirmationUrlFromEmailContent(content);
+            string requestedAt = ExtractRequestDateFromEmailContent(content);
+            DateTimeOffset sortDate = TryParseNetflixRequestDate(requestedAt, email.Date.Year, out DateTimeOffset parsedRequestDate)
+                ? parsedRequestDate
+                : email.Date;
+            string emailIdentity = GetEmailIdentity(email, confirmationUrl, requestedAt);
 
+            return new HouseholdEmailCandidate(
+                email,
+                confirmationUrl,
+                requestedAt,
+                sortDate,
+                emailIdentity);
+        }
+
+        private string ExtractConfirmationUrlFromEmail(MimeMessage email)
+            => ExtractConfirmationUrlFromEmailContent(GetEmailContent(email));
+
+        static string GetEmailContent(MimeMessage email)
+            => $"{email.HtmlBody}\n{email.TextBody}";
+
+        private string ExtractConfirmationUrlFromEmailContent(string content)
+        {
             if (string.IsNullOrWhiteSpace(content))
             {
                 return null;
@@ -239,6 +283,71 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             string targetedUrl = trustedUrls.FirstOrDefault(IsLikelyHouseholdConfirmationUrl);
 
             return targetedUrl ?? trustedUrls.First();
+        }
+
+        static string ExtractRequestDateFromEmailContent(string content)
+        {
+            string text = NormaliseWhitespace(WebUtility.HtmlDecode(content));
+            Match match = Regex.Match(
+                text,
+                @"request to update the Netflix household for your account on (?<date>\d{1,2}\s+[A-Za-z]+\s+\d{1,2}:\d{2}\s*(?:am|pm)?\s*GMT[+-]\d{1,2})",
+                RegexOptions.IgnoreCase);
+
+            return match.Success ? match.Groups["date"].Value.Trim() : null;
+        }
+
+        static bool TryParseNetflixRequestDate(string value, int fallbackYear, out DateTimeOffset requestDate)
+        {
+            requestDate = default;
+
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            Match match = Regex.Match(
+                value,
+                @"^(?<day>\d{1,2})\s+(?<month>[A-Za-z]+)\s+(?<hour>\d{1,2}):(?<minute>\d{2})\s*(?<period>am|pm)?\s*GMT(?<offset>[+-]\d{1,2})$",
+                RegexOptions.IgnoreCase);
+
+            if (!match.Success ||
+                !int.TryParse(match.Groups["day"].Value, out int day) ||
+                !EnglishMonthNumbers.TryGetValue(match.Groups["month"].Value, out int month) ||
+                !int.TryParse(match.Groups["hour"].Value, out int hour) ||
+                !int.TryParse(match.Groups["minute"].Value, out int minute) ||
+                !int.TryParse(match.Groups["offset"].Value, out int offsetHours))
+            {
+                return false;
+            }
+
+            string period = match.Groups["period"].Value;
+
+            if (period.Equals("pm", StringComparison.OrdinalIgnoreCase) && hour < 12)
+            {
+                hour += 12;
+            }
+            else if (period.Equals("am", StringComparison.OrdinalIgnoreCase) && hour == 12)
+            {
+                hour = 0;
+            }
+
+            try
+            {
+                requestDate = new DateTimeOffset(
+                    fallbackYear,
+                    month,
+                    day,
+                    hour,
+                    minute,
+                    0,
+                    TimeSpan.FromHours(offsetHours));
+
+                return true;
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return false;
+            }
         }
 
         static IEnumerable<string> ExtractUrlCandidates(string content)
@@ -409,13 +518,14 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             return subject.Contains(HouseholdUpdateSubject, StringComparison.OrdinalIgnoreCase);
         }
 
-        static string GetEmailIdentity(MimeMessage email, string confirmationUrl)
+        static string GetEmailIdentity(MimeMessage email, string confirmationUrl, string requestedAt)
             => string.Join(
                 "|",
                 email.MessageId ?? string.Empty,
                 email.Date.UtcDateTime.ToString("O"),
                 email.Subject ?? string.Empty,
                 string.Join(",", email.From.Mailboxes.Select(mailbox => mailbox.Address)),
+                requestedAt ?? string.Empty,
                 ComputeSha256(confirmationUrl ?? string.Empty));
 
         static string ComputeSha256(string value)
@@ -429,5 +539,17 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             => !string.IsNullOrWhiteSpace(domain) &&
                (domain.Equals("netflix.com", StringComparison.OrdinalIgnoreCase) ||
                domain.EndsWith(".netflix.com", StringComparison.OrdinalIgnoreCase));
+
+        static string NormaliseWhitespace(string value)
+            => string.IsNullOrWhiteSpace(value)
+                ? string.Empty
+                : Regex.Replace(value, @"\s+", " ").Trim();
+
+        sealed record HouseholdEmailCandidate(
+            MimeMessage Email,
+            string ConfirmationUrl,
+            string RequestedAt,
+            DateTimeOffset SortDate,
+            string EmailIdentity);
     }
 }
