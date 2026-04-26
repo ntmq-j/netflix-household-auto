@@ -1,156 +1,369 @@
-[![Donate](https://img.shields.io/badge/-%E2%99%A5%20Donate-%23ff69b4)](https://hmlendea.go.ro/fund.html)
-[![Latest Release](https://img.shields.io/github/v/release/hmlendea/netflix-household-confirmator)](https://github.com/hmlendea/netflix-household-confirmator/releases/latest)
-[![Build Status](https://github.com/hmlendea/netflix-household-confirmator/actions/workflows/dotnet.yml/badge.svg)](https://github.com/hmlendea/netflix-household-confirmator/actions/workflows/dotnet.yml)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://gnu.org/licenses/gpl-3.0)
+# Netflix Household Auto Confirmator
 
-# Netflix Household Confirmator
+Bot tự động đọc email Netflix Household qua Gmail/IMAP và bấm xác nhận cập nhật hộ Netflix trên trang Netflix.
 
-Automatically confirms Netflix household update emails by:
+Dự án này được tối ưu cho Ubuntu/DigitalOcean Droplet nhỏ, chạy bằng Chromium headless và systemd service.
 
-1. connecting to an IMAP inbox,
-2. scanning recent messages for the Netflix household confirmation email,
-3. extracting the confirmation URL from the email body,
-4. opening that URL in a browser automation session,
-5. clicking the confirmation button when needed.
+## Tính Năng
 
-The application runs continuously until stopped.
+- Kết nối Gmail/IMAP và quét email gần đây.
+- Tìm email có subject `Important: How to update your Netflix household`.
+- Trích xuất link Netflix confirmation trong email.
+- Mở link bằng Selenium + Chromium headless.
+- Tự động bấm đủ 2 bước:
+  - `Yes, this was me`
+  - `Confirm update`
+- Ghi log chi tiết trạng thái thực tế:
+  - `Confirmed`
+  - `AlreadyConfirmed`
+  - `LinkExpired`
+  - `RequiresSignIn`
+  - `NetflixError`
+  - `AwaitingFinalConfirmation`
+- Đọc profile/device/time request từ trang Netflix hoặc email.
+- Phân biệt email mới trong cùng Gmail thread bằng thời gian request của Netflix, ví dụ `26 April 7:57 pm GMT+7`.
+- Không log token trong URL Netflix. Log chỉ giữ domain/path.
 
-## How It Works
+## Cách Hoạt Động
 
-At startup, the application:
+1. Service khởi động Chromium headless.
+2. Service đăng nhập IMAP.
+3. Mỗi `pollIntervalSeconds`, bot đọc các email mới trong Inbox.
+4. Bot tìm email Netflix Household mới nhất trong cửa sổ `maxEmailAge`.
+5. Bot đọc thời gian request trong nội dung email, ví dụ:
 
-1. loads configuration from `appsettings.json`,
-2. starts an available Selenium-compatible web driver,
-3. logs into the configured IMAP account,
-4. enters a loop that checks recent inbox messages on a configurable interval,
-5. confirms new Netflix household requests as they arrive,
-6. retries failed polling cycles after a configurable backoff delay.
+```text
+We received a request to update the Netflix household for your account on 26 April 7:57 pm GMT+7.
+```
 
-The browser runs headless by default. Setting `debugSettings.isDebugMode` to `true` disables headless mode so you can watch the automation interact with the page.
+6. Bot dùng thời gian request này để phân biệt các email trong cùng Gmail thread.
+7. Bot mở link Netflix, bấm các nút cần thiết, rồi ghi log kết quả.
 
-## Requirements
+## Yêu Cầu
 
-- .NET SDK/runtime targeting `net10.0`
-- Access to an IMAP mailbox that receives the Netflix confirmation emails
-- A supported browser plus a compatible Selenium driver available on the machine
-- Network access to both the IMAP server and Netflix
+- Ubuntu 24.04 LTS hoặc tương đương.
+- .NET SDK 10.0.
+- Chromium + ChromeDriver.
+- Gmail/IMAP account nhận email Netflix.
+- Gmail đã bật 2-Step Verification và tạo App Password.
 
-## Configuration
+Khuyến nghị droplet:
 
-Edit `appsettings.json` before running the application.
+- Tối thiểu: `1 vCPU / 1 GB RAM` kèm swap 2 GB.
+- Khuyến nghị ổn định: `1 vCPU / 2 GB RAM`.
+- Nếu chỉ chạy bot này, 2 GB RAM là đủ thoải mái.
 
-### Example
+## Gmail IMAP
+
+Với Gmail:
+
+```text
+IMAP server: imap.gmail.com
+IMAP port: 993
+Username: địa chỉ Gmail của bạn
+Password: Google App Password, không phải mật khẩu Gmail chính
+```
+
+Cách tạo App Password:
+
+1. Vào Google Account.
+2. Bật `2-Step Verification`.
+3. Vào `App passwords`.
+4. Tạo password cho app, ví dụ tên `Netflix bot`.
+5. Dùng chuỗi password 16 ký tự đó làm IMAP password.
+
+## Deploy Trên Droplet
+
+Clone repo:
+
+```bash
+git clone https://github.com/ntmq-j/netflix-household-auto.git
+cd ~/netflix-household-auto
+```
+
+Chạy deploy:
+
+```bash
+chmod +x deploy-droplet.sh
+sudo ./deploy-droplet.sh \
+  --imap-server imap.gmail.com \
+  --imap-port 993 \
+  --imap-username your-gmail@gmail.com \
+  --imap-password 'your-google-app-password' \
+  --max-email-age 1800 \
+  --page-load-timeout 90 \
+  --poll-interval 10 \
+  --error-retry-delay 120 \
+  --debug-mode false
+```
+
+Nếu không muốn password hiện trong shell history, bỏ `--imap-password`, script sẽ hỏi password và ẩn input:
+
+```bash
+sudo ./deploy-droplet.sh \
+  --imap-server imap.gmail.com \
+  --imap-port 993 \
+  --imap-username your-gmail@gmail.com
+```
+
+## Cập Nhật Bản Mới Trên Droplet
+
+Dùng lệnh này để update code mà không đè lên `appsettings.json` đang chứa password:
+
+```bash
+sudo systemctl stop netflix-household-confirmator.service
+
+cd ~/netflix-household-auto
+git pull --ff-only
+
+dotnet publish -c Release -o .publish
+
+sudo rsync -av --delete --exclude='appsettings.json' .publish/ /opt/netflix-household-confirmator/
+sudo chown -R netflixbot:netflixbot /opt/netflix-household-confirmator
+sudo chmod 600 /opt/netflix-household-confirmator/appsettings.json
+
+sudo systemctl restart netflix-household-confirmator.service
+journalctl -u netflix-household-confirmator.service -f
+```
+
+## Quản Lý Service
+
+Kiểm tra trạng thái:
+
+```bash
+systemctl status netflix-household-confirmator.service --no-pager -l
+```
+
+Xem log realtime:
+
+```bash
+journalctl -u netflix-household-confirmator.service -f
+```
+
+Restart service:
+
+```bash
+sudo systemctl restart netflix-household-confirmator.service
+```
+
+Stop service:
+
+```bash
+sudo systemctl stop netflix-household-confirmator.service
+```
+
+Log file mặc định khi deploy droplet:
+
+```bash
+tail -f /var/log/netflix-household-confirmator/logfile.log
+```
+
+Nếu `logFilePath` là `logfile.log`, file log nằm trong `WorkingDirectory` của service:
+
+```bash
+tail -f /opt/netflix-household-confirmator/logfile.log
+```
+
+## Đọc Log
+
+Success thật sự:
+
+```text
+Operation=HouseholdConfirmation,OperationStatus=SUCCESS,Message=The household was successfully confirmed.,ConfirmationStatus=Confirmed,PageHeading=You’ve updated your Netflix household
+```
+
+Link đã hết hạn hoặc đã bị Netflix vô hiệu hóa:
+
+```text
+Operation=HouseholdConfirmation,OperationStatus=FAILURE,Message=Netflix returned terminal confirmation status: LinkExpired.,ConfirmationStatus=LinkExpired,PageHeading=This link is no longer valid
+```
+
+Bot đang ở trang confirm cuối:
+
+```text
+ConfirmationStatus=AwaitingFinalConfirmation,PageHeading=Finish updating the Netflix household for this account
+```
+
+Metadata request:
+
+```text
+RequestedByProfile=BOSS
+RequestedFromDevice=Samsung - Smart TV, Apple iPhone 12 Pro Max, PC Chrome - Web browser and other devices
+RequestedAt=26 April 7:57 pm GMT+7
+```
+
+Email metadata:
+
+```text
+EmailDate=...
+EmailIdentity=...
+```
+
+`EmailIdentity` có chứa hash của confirmation URL và request time, giúp phân biệt email mới trong cùng Gmail thread.
+
+## Cấu Hình
+
+File cấu hình trên droplet:
+
+```bash
+/opt/netflix-household-confirmator/appsettings.json
+```
+
+Ví dụ:
 
 ```json
 {
-	"botSettings": {
-		"pageLoadTimeout": 90,
-		"pollIntervalSeconds": 5,
-		"errorRetryDelaySeconds": 15
-	},
-	"imapSettings": {
-		"server": "imap.example.com",
-		"port": 993,
-		"username": "user@example.com",
-		"password": "your-password",
-		"maxEmailAge": 1800
-	},
-	"debugSettings": {
-		"crashScreenshotFileName": "crash.png",
-		"isDebugMode": false
-	},
-	"nuciLoggerSettings": {
-		"minimumLevel": "Debug",
-		"logFilePath": "logfile.log",
-		"isFileOutputEnabled": true
-	}
+  "botSettings": {
+    "pageLoadTimeout": 90,
+    "pollIntervalSeconds": 10,
+    "errorRetryDelaySeconds": 120
+  },
+  "imapSettings": {
+    "server": "imap.gmail.com",
+    "port": 993,
+    "username": "your-gmail@gmail.com",
+    "password": "your-google-app-password",
+    "maxEmailAge": 1800
+  },
+  "debugSettings": {
+    "crashScreenshotFileName": "crash.png",
+    "isDebugMode": false
+  },
+  "nuciLoggerSettings": {
+    "minimumLevel": "Debug",
+    "logFilePath": "/var/log/netflix-household-confirmator/logfile.log",
+    "isFileOutputEnabled": true
+  }
 }
 ```
 
-### Settings Reference
+Sau khi sửa config:
 
-| Section | Key | Description |
+```bash
+sudo systemctl restart netflix-household-confirmator.service
+```
+
+## Giải Thích Setting
+
+| Setting | Ý nghĩa | Gợi ý |
 | --- | --- | --- |
-| `botSettings` | `pageLoadTimeout` | Page load timeout used by browser automation, in seconds. |
-| `botSettings` | `pollIntervalSeconds` | Delay between inbox polling cycles, in seconds. |
-| `botSettings` | `errorRetryDelaySeconds` | Delay before retrying after a polling-cycle failure, in seconds. |
-| `imapSettings` | `server` | IMAP server hostname. |
-| `imapSettings` | `port` | IMAP server port. `993` is typical for IMAPS. |
-| `imapSettings` | `username` | IMAP login username. |
-| `imapSettings` | `password` | IMAP login password. |
-| `imapSettings` | `maxEmailAge` | Maximum age, in seconds, for emails considered during polling. Older emails are ignored. |
-| `debugSettings` | `crashScreenshotFileName` | File name used for a crash screenshot when browser automation fails. Leave empty to disable screenshots. |
-| `debugSettings` | `isDebugMode` | Enables visible browser mode when `true`. Headless mode is used when `false`. |
-| `nuciLoggerSettings` | `minimumLevel` | Minimum log level. |
-| `nuciLoggerSettings` | `logFilePath` | Path to the log file. |
-| `nuciLoggerSettings` | `isFileOutputEnabled` | Enables or disables file logging. |
+| `pageLoadTimeout` | Timeout khi load trang Netflix | `90` |
+| `pollIntervalSeconds` | Số giây giữa mỗi lần quét email | `10` đến `60` |
+| `errorRetryDelaySeconds` | Chờ bao lâu sau lỗi rồi mới retry | `120` |
+| `maxEmailAge` | Chỉ đọc email trong bao nhiêu giây gần đây | `1800` |
+| `isDebugMode` | `true` để chạy browser visible, `false` để headless | Droplet nên dùng `false` |
+| `logFilePath` | Đường dẫn log file | `/var/log/netflix-household-confirmator/logfile.log` |
 
-The service will keep polling the inbox until you stop it.
+## Troubleshooting
 
-### Environment Variable Overrides
+### Service chạy nhưng không thấy email mới
 
-Configuration values can also be provided via environment variables.
-For nested settings, use double underscore (`__`) separators, for example:
+Kiểm tra log:
 
-- `ImapSettings__Password=your-password`
-- `BotSettings__PollIntervalSeconds=5`
-- `BotSettings__ErrorRetryDelaySeconds=15`
+```bash
+journalctl -u netflix-household-confirmator.service -f
+```
 
-## Logging And Debugging
+Nếu chỉ thấy:
 
-- Application logs are written through `NuciLog`.
-- If browser automation crashes and `crashScreenshotFileName` is configured, a screenshot is saved next to the log file.
-- Set `debugSettings.isDebugMode` to `true` to run the browser in visible mode for troubleshooting.
+```text
+Scanned X recent inbox email(s).
+```
 
-## Operational Notes
+thì có thể:
 
-- The application inspects the inbox of the configured IMAP account.
-- It only considers relatively recent emails, based on `imapSettings.maxEmailAge`.
-- It looks for emails with a subject containing `How to update your Netflix Household` from trusted Netflix sender domains.
-- It only uses HTTPS confirmation links that match trusted Netflix domains.
-- It is intended to process new confirmation emails that arrive after the service starts.
+- Email Netflix không nằm trong Inbox.
+- Email mới bị Gmail gom thread nhưng bot chưa đọc được request time.
+- `maxEmailAge` quá ngắn.
+- Gmail IMAP sync chậm.
 
-## Development
+Thử tăng `maxEmailAge` lên 3600:
 
-### Build
+```bash
+sudo nano /opt/netflix-household-confirmator/appsettings.json
+sudo systemctl restart netflix-household-confirmator.service
+```
+
+### Link expired
+
+Log:
+
+```text
+ConfirmationStatus=LinkExpired
+PageHeading=This link is no longer valid
+```
+
+Nghĩa là link đã hết hạn hoặc request đã bị Netflix vô hiệu hóa. Hãy request confirmation mới.
+
+### ChromeDriver lỗi `unknown flag port`
+
+Thử tìm ChromeDriver của snap Chromium và symlink lại:
+
+```bash
+DRV="$(sudo find /snap/chromium -type f -name chromedriver 2>/dev/null | head -n 1)"
+echo "DRV=$DRV"
+sudo ln -sf "$DRV" /usr/local/bin/chromedriver
+/usr/local/bin/chromedriver --version
+sudo systemctl restart netflix-household-confirmator.service
+```
+
+### Chrome lỗi thiếu shared library như `libatk-1.0.so.0`
+
+Cài các dependency browser:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  libatk1.0-0 libatk-bridge2.0-0 libgtk-3-0 libnss3 \
+  libx11-xcb1 libxcomposite1 libxdamage1 libxrandr2 \
+  libgbm1 libdrm2 libxkbcommon0 libxshmfence1 \
+  fonts-liberation ca-certificates
+```
+
+Lưu ý: sau dấu `\` không được có ký tự thừa. Nếu copy sai thành `\  lib...` thì apt sẽ báo `Unable to locate package`.
+
+### Kiểm tra Chromium/ChromeDriver đang chạy
+
+```bash
+systemctl status netflix-household-confirmator.service --no-pager -l
+```
+
+Bạn sẽ thấy các process:
+
+```text
+/usr/bin/dotnet /opt/netflix-household-confirmator/NetflixHouseholdConfirmator.dll
+/usr/local/bin/chromedriver --port=...
+/snap/chromium/current/usr/lib/chromium-browser/chrome --headless ...
+```
+
+## Chạy Local Để Dev
+
+Build:
 
 ```bash
 dotnet build
 ```
 
-### Run
+Run:
 
 ```bash
 dotnet run
 ```
 
-### Publish
-
-The repository includes `release.sh`, which delegates to the upstream deployment script used by the project maintainer.
+Publish:
 
 ```bash
-bash ./release.sh 1.0.0
+dotnet publish -c Release -o .publish
 ```
 
-This script downloads and executes an external release helper from: `https://raw.githubusercontent.com/hmlendea/deployment-scripts/master/release/dotnet/10.0.sh`
+## Bảo Mật
 
-**Note:** Piping into `bash` is an intensely controversial topic. Please review any external scripts before running them in your environment!
-
-### Release Script
-
-## Contributing
-
-Contributions are welcome.
-
-Please:
-
-- keep changes cross-platform
-- preserve public APIs unless the change is intentionally breaking
-- keep pull requests focused and consistent with existing style
-- update documentation when behaviour changes
-- add or update tests for new behaviour
+- Không commit `appsettings.json` thật có password Gmail.
+- Dùng Google App Password, không dùng mật khẩu Gmail chính.
+- Log không ghi query token Netflix, chỉ ghi path URL.
+- File config trên droplet nên để permission `600`.
+- Droplet power off vẫn bị tính tiền trên DigitalOcean; muốn ngừng phí thì phải destroy droplet.
 
 ## License
 
-Licensed under the GNU General Public License v3.0 or later.
-See [LICENSE](./LICENSE) for details.
+Dự án gốc dùng GPLv3. Xem [LICENSE](./LICENSE).
