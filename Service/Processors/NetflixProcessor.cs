@@ -3,13 +3,19 @@ using NetflixHouseholdConfirmator.Logging;
 using NuciLog.Core;
 using NuciWeb;
 using NuciWeb.Automation;
+using OpenQA.Selenium;
 
 namespace NetflixHouseholdConfirmator.Service.Processors
 {
     public sealed class NetflixProcessor(
+        IWebDriver webDriver,
         IWebProcessor webProcessor,
         ILogger logger) : INetflixProcessor
     {
+        readonly IWebDriver webDriver = webDriver;
+        readonly IWebProcessor webProcessor = webProcessor;
+        readonly ILogger logger = logger;
+
         public bool ConfirmHousehold(string confirmationUrl)
         {
             if (!IsValidNetflixConfirmationUrl(confirmationUrl))
@@ -29,7 +35,7 @@ namespace NetflixHouseholdConfirmator.Service.Processors
 
             try
             {
-                webProcessor.GoToUrl(confirmationUrl);
+                webDriver.Navigate().GoToUrl(confirmationUrl);
 
                 string confirmButtonSelector = Select.ByXPath(@"//button[@data-uia='set-primary-location-action']");
                 string locationDetailsSelector = Select.ByXPath(@"//div[@data-uia='location-details']");
