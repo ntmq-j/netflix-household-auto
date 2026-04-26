@@ -176,7 +176,8 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             logger.Info(
                 MyOperation.ListenForConfirmationRequests,
                 OperationStatus.InProgress,
-                $"Scanned {emails.Count} recent inbox email(s).");
+                $"Scanned {emails.Count} recent inbox email(s).",
+                [new(MyLogInfoKey.InboxCount, imapClient.Inbox.Count)]);
 
             List<HouseholdEmailCandidate> householdEmailCandidates = emails
                 .Where(IsPotentialNetflixHouseholdEmail)
@@ -493,6 +494,8 @@ namespace NetflixHouseholdConfirmator.Service.Processors
                 inbox.Open(FolderAccess.ReadOnly);
             }
 
+            RefreshInbox(inbox);
+
             IList<MimeMessage> emails = [];
             int firstMessageIndex = Math.Max(0, inbox.Count - MaxInboxMessagesToScan);
 
@@ -504,6 +507,14 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             }
 
             return emails;
+        }
+
+        void RefreshInbox(IMailFolder inbox)
+        {
+            // Gmail can keep a selected IMAP mailbox open while new messages arrive in the
+            // same conversation. NOOP/CHECK forces the folder summary/count to catch up.
+            imapClient.NoOp();
+            inbox.Check();
         }
 
         void EnsureConnectedAndAuthenticated()
