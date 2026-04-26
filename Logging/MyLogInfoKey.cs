@@ -39,5 +39,7 @@ namespace NetflixHouseholdConfirmator.Logging
         public static LogInfoKey EmailIdentity => new MyLogInfoKey(nameof(EmailIdentity));
 
         public static LogInfoKey InboxCount => new MyLogInfoKey(nameof(InboxCount));
+
+        public static LogInfoKey FolderCounts => new MyLogInfoKey(nameof(FolderCounts));
     }
 }

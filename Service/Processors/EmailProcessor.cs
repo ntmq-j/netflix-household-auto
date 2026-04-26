@@ -171,13 +171,17 @@ namespace NetflixHouseholdConfirmator.Service.Processors
         {
             EnsureConnectedAndAuthenticated();
 
-            List<MimeMessage> emails = RetrieveRecentEmails().ToList();
+            RetrievedEmails retrievedEmails = RetrieveRecentEmails();
+            List<MimeMessage> emails = retrievedEmails.Emails.ToList();
 
             logger.Info(
                 MyOperation.ListenForConfirmationRequests,
                 OperationStatus.InProgress,
-                $"Scanned {emails.Count} recent inbox email(s).",
-                [new(MyLogInfoKey.InboxCount, imapClient.Inbox.Count)]);
+                $"Scanned {emails.Count} recent email(s) across IMAP folder(s): {retrievedEmails.FolderCounts}.",
+                [
+                    new(MyLogInfoKey.InboxCount, imapClient.Inbox.Count),
+                    new(MyLogInfoKey.FolderCounts, retrievedEmails.FolderCounts)
+                ]);
 
             List<HouseholdEmailCandidate> householdEmailCandidates = emails
                 .Where(IsPotentialNetflixHouseholdEmail)
@@ -485,36 +489,111 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             return HouseholdUrlHints.Any(hint => normalisedUrl.Contains(hint.ToLowerInvariant(), StringComparison.Ordinal));
         }
 
-        private IEnumerable<MimeMessage> RetrieveRecentEmails()
+        private RetrievedEmails RetrieveRecentEmails()
         {
-            var inbox = imapClient.Inbox;
+            List<MimeMessage> emails = [];
+            List<string> folderCounts = [];
+            HashSet<string> seenEmailIds = [];
 
-            if (!inbox.IsOpen)
+            foreach (IMailFolder folder in GetScanFolders())
             {
-                inbox.Open(FolderAccess.ReadOnly);
+                if (!folder.IsOpen)
+                {
+                    folder.Open(FolderAccess.ReadOnly);
+                }
+
+                RefreshFolder(folder);
+
+                folderCounts.Add($"{folder.FullName}={folder.Count}");
+
+                int firstMessageIndex = Math.Max(0, folder.Count - MaxInboxMessagesToScan);
+
+                for(int i = folder.Count - 1; i >= firstMessageIndex; i--)
+                {
+                    MimeMessage email = folder.GetMessage(i);
+                    string emailKey = GetEmailScanKey(email);
+
+                    if (!seenEmailIds.Add(emailKey))
+                    {
+                        continue;
+                    }
+
+                    emails.Add(email);
+                }
             }
 
-            RefreshInbox(inbox);
-
-            IList<MimeMessage> emails = [];
-            int firstMessageIndex = Math.Max(0, inbox.Count - MaxInboxMessagesToScan);
-
-            for(int i = inbox.Count - 1; i >= firstMessageIndex; i--)
-            {
-                var email = inbox.GetMessage(i);
-
-                emails.Add(email);
-            }
-
-            return emails;
+            return new RetrievedEmails(emails, string.Join(",", folderCounts));
         }
 
-        void RefreshInbox(IMailFolder inbox)
+        IEnumerable<IMailFolder> GetScanFolders()
         {
-            // Gmail can keep a selected IMAP mailbox open while new messages arrive in the
+            yield return imapClient.Inbox;
+
+            IMailFolder allMailFolder = TryGetAllMailFolder();
+
+            if (allMailFolder is not null &&
+                !string.Equals(allMailFolder.FullName, imapClient.Inbox.FullName, StringComparison.OrdinalIgnoreCase))
+            {
+                yield return allMailFolder;
+            }
+        }
+
+        IMailFolder TryGetAllMailFolder()
+        {
+            try
+            {
+                return imapClient.GetFolder(SpecialFolder.All);
+            }
+            catch (Exception)
+            {
+                return TryFindFolderByName("All Mail");
+            }
+        }
+
+        IMailFolder TryFindFolderByName(string folderName)
+        {
+            foreach (FolderNamespace folderNamespace in imapClient.PersonalNamespaces)
+            {
+                IMailFolder rootFolder = imapClient.GetFolder(folderNamespace);
+                IMailFolder matchedFolder = FindFolderByName(rootFolder, folderName);
+
+                if (matchedFolder is not null)
+                {
+                    return matchedFolder;
+                }
+            }
+
+            return null;
+        }
+
+        IMailFolder FindFolderByName(IMailFolder folder, string folderName)
+        {
+            if (folder.Name.Equals(folderName, StringComparison.OrdinalIgnoreCase) ||
+                folder.FullName.EndsWith($"/{folderName}", StringComparison.OrdinalIgnoreCase) ||
+                folder.FullName.EndsWith($".{folderName}", StringComparison.OrdinalIgnoreCase))
+            {
+                return folder;
+            }
+
+            foreach (IMailFolder subfolder in folder.GetSubfolders(false))
+            {
+                IMailFolder matchedFolder = FindFolderByName(subfolder, folderName);
+
+                if (matchedFolder is not null)
+                {
+                    return matchedFolder;
+                }
+            }
+
+            return null;
+        }
+
+        void RefreshFolder(IMailFolder folder)
+        {
+            // Gmail can keep selected mailboxes open while new messages arrive in the
             // same conversation. NOOP/CHECK forces the folder summary/count to catch up.
             imapClient.NoOp();
-            inbox.Check();
+            folder.Check();
         }
 
         void EnsureConnectedAndAuthenticated()
@@ -543,6 +622,16 @@ namespace NetflixHouseholdConfirmator.Service.Processors
                 string.Join(",", email.From.Mailboxes.Select(mailbox => mailbox.Address)),
                 requestedAt ?? string.Empty,
                 ComputeSha256(confirmationUrl ?? string.Empty));
+
+        static string GetEmailScanKey(MimeMessage email)
+        {
+            if (!string.IsNullOrWhiteSpace(email.MessageId))
+            {
+                return email.MessageId;
+            }
+
+            return $"{email.Date.UtcDateTime:O}|{email.Subject}|{string.Join(",", email.From.Mailboxes.Select(mailbox => mailbox.Address))}";
+        }
 
         static string ComputeSha256(string value)
         {
@@ -575,5 +664,9 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             string RequestedAt,
             DateTimeOffset SortDate,
             string EmailIdentity);
+
+        sealed record RetrievedEmails(
+            IEnumerable<MimeMessage> Emails,
+            string FolderCounts);
     }
 }
