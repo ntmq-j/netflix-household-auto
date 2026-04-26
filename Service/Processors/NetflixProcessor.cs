@@ -243,7 +243,7 @@ namespace NetflixHouseholdConfirmator.Service.Processors
                 .FirstOrDefault(element => element.Displayed)?.Text);
 
             RequestMetadata requestMetadata = ExtractRequestMetadata(bodyText);
-            ConfirmationPageStatus status = DetectPageStatus(bodyText, knownSelectors);
+            ConfirmationPageStatus status = DetectPageStatus($"{title} {heading} {bodyText}", knownSelectors);
 
             return new PageSnapshot(
                 status,
@@ -301,6 +301,8 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             }
 
             if (normalisedBody.Contains("household has been updated", StringComparison.Ordinal) ||
+                normalisedBody.Contains("you've updated your netflix household", StringComparison.Ordinal) ||
+                normalisedBody.Contains("you’ve updated your netflix household", StringComparison.Ordinal) ||
                 normalisedBody.Contains("successfully updated", StringComparison.Ordinal) ||
                 normalisedBody.Contains("was successfully confirmed", StringComparison.Ordinal))
             {
@@ -364,7 +366,7 @@ namespace NetflixHouseholdConfirmator.Service.Processors
         {
             string text = NormaliseWhitespace(bodyText);
 
-            string device = MatchValue(text, @"Your\s+(?<value>.+?)\s+Requested by");
+            string device = MatchValue(text, @"NETFLIX HOUSEHOLD\s+Your\s+(?<value>.+?)\s+Requested by");
             string profile = MatchValue(text, @"Requested by\s+(?<value>.+?)\s+(?:from|at)\s+");
             string requestedAt = MatchValue(text, @"Requested by\s+.+?\s+at\s+(?<value>.+?)(?:\s+Updating|\s+If this|\s+Keep your|\s*$)");
 
@@ -380,9 +382,14 @@ namespace NetflixHouseholdConfirmator.Service.Processors
 
             return new RequestMetadata(
                 NullIfEmpty(profile),
-                NullIfEmpty(device),
+                NullIfEmpty(RemoveLeadingArticle(device)),
                 NullIfEmpty(requestedAt));
         }
+
+        static string RemoveLeadingArticle(string value)
+            => string.IsNullOrWhiteSpace(value)
+                ? value
+                : Regex.Replace(value, @"^(a|an|the)\s+", string.Empty, RegexOptions.IgnoreCase).Trim();
 
         static string MatchValue(string text, string pattern)
         {
