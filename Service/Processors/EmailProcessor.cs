@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.RegularExpressions;
 
 using MailKit;
@@ -167,7 +169,8 @@ namespace NetflixHouseholdConfirmator.Service.Processors
                 return null;
             }
 
-            string emailId = GetEmailIdentity(email);
+            string confirmationUrl = ExtractConfirmationUrlFromEmail(email);
+            string emailId = GetEmailIdentity(email, confirmationUrl);
 
             if (processedEmailIds.Contains(emailId))
             {
@@ -176,19 +179,25 @@ namespace NetflixHouseholdConfirmator.Service.Processors
 
             processedEmailIds.Add(emailId);
 
+            IEnumerable<LogInfo> logInfos =
+            [
+                new(MyLogInfoKey.EmailDate, email.Date.ToString("O")),
+                new(MyLogInfoKey.EmailIdentity, emailId)
+            ];
+
             logger.Info(
                 MyOperation.ListenForConfirmationRequests,
                 OperationStatus.InProgress,
-                $"Found latest Netflix household email. Subject: {email.Subject}");
-
-            string confirmationUrl = ExtractConfirmationUrlFromEmail(email);
+                $"Found latest Netflix household email. Subject: {email.Subject}",
+                logInfos);
 
             if (!string.IsNullOrWhiteSpace(confirmationUrl))
             {
                 logger.Info(
                     MyOperation.ListenForConfirmationRequests,
                     OperationStatus.Success,
-                    "Extracted a Netflix household confirmation URL.");
+                    "Extracted a Netflix household confirmation URL.",
+                    logInfos);
 
                 return confirmationUrl;
             }
@@ -196,7 +205,8 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             logger.Error(
                 MyOperation.ListenForConfirmationRequests,
                 OperationStatus.Failure,
-                $"Matched the latest Netflix household email but could not extract a valid confirmation URL. Subject: {email.Subject}");
+                $"Matched the latest Netflix household email but could not extract a valid confirmation URL. Subject: {email.Subject}",
+                logInfos);
 
             return null;
         }
@@ -399,14 +409,20 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             return subject.Contains(HouseholdUpdateSubject, StringComparison.OrdinalIgnoreCase);
         }
 
-        static string GetEmailIdentity(MimeMessage email)
-        {
-            if (!string.IsNullOrWhiteSpace(email.MessageId))
-            {
-                return email.MessageId;
-            }
+        static string GetEmailIdentity(MimeMessage email, string confirmationUrl)
+            => string.Join(
+                "|",
+                email.MessageId ?? string.Empty,
+                email.Date.UtcDateTime.ToString("O"),
+                email.Subject ?? string.Empty,
+                string.Join(",", email.From.Mailboxes.Select(mailbox => mailbox.Address)),
+                ComputeSha256(confirmationUrl ?? string.Empty));
 
-            return $"{email.Date.UtcDateTime:o}|{email.Subject}|{string.Join(",", email.From.Mailboxes.Select(mailbox => mailbox.Address))}";
+        static string ComputeSha256(string value)
+        {
+            byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(value));
+
+            return Convert.ToHexString(hash);
         }
 
         static bool IsTrustedNetflixDomain(string domain)

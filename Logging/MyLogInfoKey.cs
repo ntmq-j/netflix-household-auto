@@ -33,5 +33,9 @@ namespace NetflixHouseholdConfirmator.Logging
         public static LogInfoKey PageHeading => new MyLogInfoKey(nameof(PageHeading));
 
         public static LogInfoKey CurrentUrl => new MyLogInfoKey(nameof(CurrentUrl));
+
+        public static LogInfoKey EmailDate => new MyLogInfoKey(nameof(EmailDate));
+
+        public static LogInfoKey EmailIdentity => new MyLogInfoKey(nameof(EmailIdentity));
     }
 }
