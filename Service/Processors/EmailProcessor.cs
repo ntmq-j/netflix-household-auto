@@ -160,44 +160,43 @@ namespace NetflixHouseholdConfirmator.Service.Processors
                 OperationStatus.InProgress,
                 $"Scanned {emails.Count} recent inbox email(s).");
 
-            foreach (MimeMessage email in emails)
+            MimeMessage email = emails.FirstOrDefault(IsPotentialNetflixHouseholdEmail);
+
+            if (email is null)
             {
-                if (!IsPotentialNetflixHouseholdEmail(email))
-                {
-                    continue;
-                }
+                return null;
+            }
 
-                string emailId = GetEmailIdentity(email);
+            string emailId = GetEmailIdentity(email);
 
-                if (processedEmailIds.Contains(emailId))
-                {
-                    continue;
-                }
+            if (processedEmailIds.Contains(emailId))
+            {
+                return null;
+            }
 
-                processedEmailIds.Add(emailId);
+            processedEmailIds.Add(emailId);
 
+            logger.Info(
+                MyOperation.ListenForConfirmationRequests,
+                OperationStatus.InProgress,
+                $"Found latest Netflix household email. Subject: {email.Subject}");
+
+            string confirmationUrl = ExtractConfirmationUrlFromEmail(email);
+
+            if (!string.IsNullOrWhiteSpace(confirmationUrl))
+            {
                 logger.Info(
                     MyOperation.ListenForConfirmationRequests,
-                    OperationStatus.InProgress,
-                    $"Found Netflix household email. Subject: {email.Subject}");
+                    OperationStatus.Success,
+                    "Extracted a Netflix household confirmation URL.");
 
-                string confirmationUrl = ExtractConfirmationUrlFromEmail(email);
-
-                if (!string.IsNullOrWhiteSpace(confirmationUrl))
-                {
-                    logger.Info(
-                        MyOperation.ListenForConfirmationRequests,
-                        OperationStatus.Success,
-                        "Extracted a Netflix household confirmation URL.");
-
-                    return confirmationUrl;
-                }
-
-                logger.Error(
-                    MyOperation.ListenForConfirmationRequests,
-                    OperationStatus.Failure,
-                    $"Matched a Netflix household email but could not extract a valid confirmation URL. Subject: {email.Subject}");
+                return confirmationUrl;
             }
+
+            logger.Error(
+                MyOperation.ListenForConfirmationRequests,
+                OperationStatus.Failure,
+                $"Matched the latest Netflix household email but could not extract a valid confirmation URL. Subject: {email.Subject}");
 
             return null;
         }
