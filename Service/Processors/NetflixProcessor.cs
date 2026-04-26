@@ -34,17 +34,30 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             {
                 webDriver.Navigate().GoToUrl(confirmationUrl);
 
-                By confirmButtonSelector = By.XPath(@"//button[@data-uia='set-primary-location-action']");
+                By requestApprovalButtonSelector = By.XPath(
+                    @"//button[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'yes') and contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'this was me')]");
+                By confirmUpdateButtonSelector = By.XPath(
+                    @"//button[@data-uia='set-primary-location-action' or contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'confirm update')]");
                 By locationDetailsSelector = By.XPath(@"//div[@data-uia='location-details']");
 
-                IWebElement visibleElement = WaitForAnyElementToBeVisible(
-                    confirmButtonSelector,
+                IWebElement firstStepElement = WaitForAnyElementToBeVisible(
+                    requestApprovalButtonSelector,
+                    confirmUpdateButtonSelector,
                     locationDetailsSelector);
 
-                if (TryFindVisibleElement(locationDetailsSelector) is null)
+                if (ElementMatches(firstStepElement, requestApprovalButtonSelector))
                 {
-                    visibleElement.Click();
-                    WaitForElementToBeVisible(locationDetailsSelector);
+                    Click(firstStepElement);
+                }
+
+                IWebElement confirmUpdateButton = WaitForElementToBeVisible(confirmUpdateButtonSelector);
+                Click(confirmUpdateButton);
+
+                WaitForConfirmationToFinish(confirmUpdateButtonSelector);
+
+                if (TryFindVisibleElement(confirmUpdateButtonSelector) is not null)
+                {
+                    throw new WebDriverException("The final Netflix confirmation button is still visible after clicking it.");
                 }
 
                 logger.Info(
@@ -88,6 +101,41 @@ namespace NetflixHouseholdConfirmator.Service.Processors
 
         IWebElement WaitForElementToBeVisible(By selector)
             => CreateWait().Until(_ => TryFindVisibleElement(selector));
+
+        void WaitForConfirmationToFinish(By confirmUpdateButtonSelector)
+        {
+            WebDriverWait wait = CreateWait();
+
+            wait.Until(_ => TryFindVisibleElement(confirmUpdateButtonSelector) is null);
+        }
+
+        void Click(IWebElement element)
+        {
+            try
+            {
+                element.Click();
+            }
+            catch (ElementClickInterceptedException)
+            {
+                ((IJavaScriptExecutor)webDriver).ExecuteScript("arguments[0].click();", element);
+            }
+        }
+
+        bool ElementMatches(IWebElement element, By selector)
+        {
+            try
+            {
+                return webDriver.FindElement(selector).Equals(element);
+            }
+            catch (NoSuchElementException)
+            {
+                return false;
+            }
+            catch (StaleElementReferenceException)
+            {
+                return false;
+            }
+        }
 
         IWebElement TryFindVisibleElement(By selector)
         {
