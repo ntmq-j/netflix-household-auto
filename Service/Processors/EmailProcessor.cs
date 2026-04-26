@@ -25,6 +25,11 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             "household",
             "update-household",
             "set-primary-location",
+            "primary-location",
+            "location",
+            "confirm",
+            "verify",
+            "otp",
             ConfirmationUrlToken
         ];
 
@@ -32,7 +37,7 @@ namespace NetflixHouseholdConfirmator.Service.Processors
         readonly ILogger logger = logger;
         readonly ImapClient imapClient = new();
 
-        DateTime lastConfirmationEmailDateTime = DateTime.UtcNow;
+        readonly ISet<string> processedEmailIds = new HashSet<string>();
 
         public void LogIn()
         {
@@ -148,7 +153,12 @@ namespace NetflixHouseholdConfirmator.Service.Processors
         {
             EnsureConnectedAndAuthenticated();
 
-            IEnumerable<MimeMessage> emails = RetrieveRecentEmails();
+            List<MimeMessage> emails = RetrieveRecentEmails().ToList();
+
+            logger.Info(
+                MyOperation.ListenForConfirmationRequests,
+                OperationStatus.InProgress,
+                $"Scanned {emails.Count} recent inbox email(s).");
 
             foreach (MimeMessage email in emails)
             {
@@ -157,21 +167,29 @@ namespace NetflixHouseholdConfirmator.Service.Processors
                     continue;
                 }
 
-                DateTime emailDateTime = email.Date.UtcDateTime;
+                string emailId = GetEmailIdentity(email);
 
-                if (emailDateTime <= lastConfirmationEmailDateTime)
+                if (processedEmailIds.Contains(emailId))
                 {
                     continue;
                 }
 
-                // Move cursor forward as soon as we pick up a new matching email
-                // so one malformed message does not get retried forever.
-                lastConfirmationEmailDateTime = emailDateTime;
+                processedEmailIds.Add(emailId);
+
+                logger.Info(
+                    MyOperation.ListenForConfirmationRequests,
+                    OperationStatus.InProgress,
+                    $"Found Netflix household email. Subject: {email.Subject}");
 
                 string confirmationUrl = ExtractConfirmationUrlFromEmail(email);
 
                 if (!string.IsNullOrWhiteSpace(confirmationUrl))
                 {
+                    logger.Info(
+                        MyOperation.ListenForConfirmationRequests,
+                        OperationStatus.Success,
+                        "Extracted a Netflix household confirmation URL.");
+
                     return confirmationUrl;
                 }
 
@@ -379,27 +397,17 @@ namespace NetflixHouseholdConfirmator.Service.Processors
         {
             string subject = email.Subject ?? string.Empty;
 
-            if (!subject.Contains(HouseholdUpdateSubject, StringComparison.OrdinalIgnoreCase))
+            return subject.Contains(HouseholdUpdateSubject, StringComparison.OrdinalIgnoreCase);
+        }
+
+        static string GetEmailIdentity(MimeMessage email)
+        {
+            if (!string.IsNullOrWhiteSpace(email.MessageId))
             {
-                return false;
+                return email.MessageId;
             }
 
-            foreach (MailboxAddress mailbox in email.From.Mailboxes)
-            {
-                string[] parts = mailbox.Address?.Split('@');
-
-                if (parts is null || parts.Length != 2)
-                {
-                    continue;
-                }
-
-                if (IsTrustedNetflixDomain(parts[1]))
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            return $"{email.Date.UtcDateTime:o}|{email.Subject}|{string.Join(",", email.From.Mailboxes.Select(mailbox => mailbox.Address))}";
         }
 
         static bool IsTrustedNetflixDomain(string domain)
