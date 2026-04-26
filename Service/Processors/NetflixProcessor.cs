@@ -276,6 +276,11 @@ namespace NetflixHouseholdConfirmator.Service.Processors
                 return ConfirmationPageStatus.AwaitingFinalConfirmation;
             }
 
+            if (normalisedBody.Contains("hoàn tất cập nhật hộ gia đình netflix", StringComparison.Ordinal))
+            {
+                return ConfirmationPageStatus.AwaitingFinalConfirmation;
+            }
+
             if (normalisedBody.Contains("yes, this was me", StringComparison.Ordinal))
             {
                 return ConfirmationPageStatus.AwaitingRequestApproval;
@@ -303,6 +308,7 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             if (normalisedBody.Contains("household has been updated", StringComparison.Ordinal) ||
                 normalisedBody.Contains("you've updated your netflix household", StringComparison.Ordinal) ||
                 normalisedBody.Contains("you’ve updated your netflix household", StringComparison.Ordinal) ||
+                normalisedBody.Contains("bạn đã cập nhật hộ gia đình netflix", StringComparison.Ordinal) ||
                 normalisedBody.Contains("successfully updated", StringComparison.Ordinal) ||
                 normalisedBody.Contains("was successfully confirmed", StringComparison.Ordinal))
             {

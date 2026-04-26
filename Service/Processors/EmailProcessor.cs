@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 
 using MailKit;
 using MailKit.Net.Imap;
+using MailKit.Search;
 using MimeKit;
 using NuciLog.Core;
 
@@ -22,7 +23,8 @@ namespace NetflixHouseholdConfirmator.Service.Processors
     {
         const string HouseholdUpdateSubject = "How to update your Netflix Household";
         const string ConfirmationUrlToken = "UPDATE_HOUSEHOLD_REQUESTED_OTP_CTA";
-        const int MaxInboxMessagesToScan = 100;
+        const int MaxFallbackMessagesToScan = 100;
+        const int MaxSearchResultsToFetch = 50;
         static readonly IDictionary<string, int> EnglishMonthNumbers = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         {
             ["January"] = 1,
@@ -177,7 +179,7 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             logger.Info(
                 MyOperation.ListenForConfirmationRequests,
                 OperationStatus.InProgress,
-                $"Scanned {emails.Count} recent email(s) across IMAP folder(s): {retrievedEmails.FolderCounts}.",
+                $"Retrieved {emails.Count} Netflix candidate email(s) across IMAP folder(s): {retrievedEmails.FolderCounts}.",
                 [
                     new(MyLogInfoKey.InboxCount, imapClient.Inbox.Count),
                     new(MyLogInfoKey.FolderCounts, retrievedEmails.FolderCounts)
@@ -506,23 +508,65 @@ namespace NetflixHouseholdConfirmator.Service.Processors
 
                 folderCounts.Add($"{folder.FullName}={folder.Count}");
 
-                int firstMessageIndex = Math.Max(0, folder.Count - MaxInboxMessagesToScan);
+                IList<MimeMessage> folderEmails = SearchNetflixEmails(folder).ToList();
+                folderCounts.Add($"{folder.FullName}:search={folderEmails.Count}");
 
-                for(int i = folder.Count - 1; i >= firstMessageIndex; i--)
-                {
-                    MimeMessage email = folder.GetMessage(i);
-                    string emailKey = GetEmailScanKey(email);
-
-                    if (!seenEmailIds.Add(emailKey))
-                    {
-                        continue;
-                    }
-
-                    emails.Add(email);
-                }
+                AddUniqueEmails(emails, folderEmails, seenEmailIds);
             }
 
             return new RetrievedEmails(emails, string.Join(",", folderCounts));
+        }
+
+        IEnumerable<MimeMessage> SearchNetflixEmails(IMailFolder folder)
+        {
+            try
+            {
+                IList<UniqueId> emailIds = folder.Search(SearchQuery.SubjectContains("Netflix household"));
+
+                return emailIds
+                    .Reverse()
+                    .Take(MaxSearchResultsToFetch)
+                    .Select(emailId => folder.GetMessage(emailId))
+                    .ToList();
+            }
+            catch (Exception exception)
+            {
+                logger.Error(
+                    MyOperation.ListenForConfirmationRequests,
+                    OperationStatus.Failure,
+                    $"Failed to search folder {folder.FullName}. Falling back to the latest {MaxFallbackMessagesToScan} message(s).",
+                    exception);
+
+                return RetrieveLatestFolderEmails(folder);
+            }
+        }
+
+        IEnumerable<MimeMessage> RetrieveLatestFolderEmails(IMailFolder folder)
+        {
+            int firstMessageIndex = Math.Max(0, folder.Count - MaxFallbackMessagesToScan);
+
+            for(int i = folder.Count - 1; i >= firstMessageIndex; i--)
+            {
+                yield return folder.GetMessage(i);
+            }
+        }
+
+        static void AddUniqueEmails(
+            List<MimeMessage> emails,
+            IEnumerable<MimeMessage> candidateEmails,
+            ISet<string> seenEmailIds)
+        {
+            foreach (MimeMessage email in candidateEmails)
+            {
+                string emailKey = GetEmailScanKey(email);
+
+                if (!seenEmailIds.Add(emailKey))
+                {
+                    continue;
+                }
+
+                emails.Add(email);
+            }
         }
 
         IEnumerable<IMailFolder> GetScanFolders()
