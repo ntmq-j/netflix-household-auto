@@ -23,7 +23,6 @@ namespace NetflixHouseholdConfirmator.Service.Processors
     {
         const string HouseholdUpdateSubject = "How to update your Netflix Household";
         const string ConfirmationUrlToken = "UPDATE_HOUSEHOLD_REQUESTED_OTP_CTA";
-        const int MaxSearchResultsToFetch = 50;
         static readonly IDictionary<string, int> EnglishMonthNumbers = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         {
             ["January"] = 1,
@@ -521,7 +520,7 @@ namespace NetflixHouseholdConfirmator.Service.Processors
 
             return emailIds
                 .Reverse()
-                .Take(MaxSearchResultsToFetch)
+                .Take(imapSettings.MaxSearchResultsToFetch)
                 .Select(emailId => folder.GetMessage(emailId))
                 .ToList();
         }

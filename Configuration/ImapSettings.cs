@@ -12,6 +12,8 @@ namespace NetflixHouseholdConfirmator.Configuration
 
         public int MaxEmailAge { get; set; }
 
+        public int MaxSearchResultsToFetch { get; set; } = 20;
+
         public string Folder { get; set; }
     }
 }

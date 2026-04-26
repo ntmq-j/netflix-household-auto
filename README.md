@@ -92,6 +92,7 @@ sudo ./deploy-droplet.sh \
   --imap-folder NetflixHousehold \
   --imap-password 'your-google-app-password' \
   --max-email-age 1800 \
+  --max-search-results 20 \
   --page-load-timeout 90 \
   --poll-interval 10 \
   --error-retry-delay 120 \
@@ -226,6 +227,7 @@ Example:
     "username": "your-gmail@gmail.com",
     "password": "your-google-app-password",
     "maxEmailAge": 1800,
+    "maxSearchResultsToFetch": 20,
     "folder": "NetflixHousehold"
   },
   "debugSettings": {
@@ -254,6 +256,7 @@ sudo systemctl restart netflix-household-confirmator.service
 | `pollIntervalSeconds` | Delay between folder scans | `10` to `60` |
 | `errorRetryDelaySeconds` | Delay before retrying after an error | `120` |
 | `maxEmailAge` | Only consider Netflix requests newer than this many seconds | `1800` |
+| `maxSearchResultsToFetch` | Maximum matching emails to fetch from the configured label on each scan | `10` to `20` |
 | `folder` | IMAP folder/Gmail label to scan. No fallback is used. | `NetflixHousehold` |
 | `isDebugMode` | `true` runs a visible browser, `false` runs headless | Use `false` on Droplets |
 | `logFilePath` | Log file location | `/var/log/netflix-household-confirmator/logfile.log` |
@@ -281,6 +284,7 @@ possible causes are:
 - Your Gmail filter did not apply the label to the new Netflix email.
 - The service could not parse the request timestamp.
 - `maxEmailAge` is too short.
+- `maxSearchResultsToFetch` is too low for a very active label/thread.
 
 First verify the label name and IMAP visibility in Gmail. If the email is old, try increasing `maxEmailAge` to 3600:
 

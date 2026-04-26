@@ -213,6 +213,11 @@ namespace NetflixHouseholdConfirmator
                 throw new InvalidOperationException("The IMAP max email age must be greater than 0 seconds.");
             }
 
+            if (imapSettings.MaxSearchResultsToFetch <= 0)
+            {
+                throw new InvalidOperationException("The IMAP max search results to fetch must be greater than 0.");
+            }
+
             if (string.IsNullOrWhiteSpace(imapSettings.Folder))
             {
                 throw new InvalidOperationException(

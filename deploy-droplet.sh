@@ -15,6 +15,7 @@ IMAP_USERNAME="${IMAP_USERNAME:-}"
 IMAP_PASSWORD="${IMAP_PASSWORD:-}"
 IMAP_FOLDER="${IMAP_FOLDER:-NetflixHousehold}"
 MAX_EMAIL_AGE="${MAX_EMAIL_AGE:-1800}"
+MAX_SEARCH_RESULTS_TO_FETCH="${MAX_SEARCH_RESULTS_TO_FETCH:-20}"
 PAGE_LOAD_TIMEOUT="${PAGE_LOAD_TIMEOUT:-90}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
 ERROR_RETRY_DELAY_SECONDS="${ERROR_RETRY_DELAY_SECONDS:-15}"
@@ -38,6 +39,7 @@ Options:
   --imap-password <value>       IMAP password
   --imap-folder <value>         IMAP folder/label to scan (default: NetflixHousehold)
   --max-email-age <value>       Max email age in seconds (default: 1800)
+  --max-search-results <value>  Max matching emails to fetch per scan (default: 20)
   --page-load-timeout <value>   Browser page load timeout in seconds (default: 90)
   --poll-interval <value>       Inbox polling interval in seconds (default: 5)
   --error-retry-delay <value>   Retry delay after a processing error in seconds (default: 15)
@@ -46,7 +48,7 @@ Options:
 
 You can also pass values through environment variables:
   IMAP_SERVER, IMAP_PORT, IMAP_USERNAME, IMAP_PASSWORD, IMAP_FOLDER,
-  MAX_EMAIL_AGE, PAGE_LOAD_TIMEOUT, POLL_INTERVAL_SECONDS,
+  MAX_EMAIL_AGE, MAX_SEARCH_RESULTS_TO_FETCH, PAGE_LOAD_TIMEOUT, POLL_INTERVAL_SECONDS,
   ERROR_RETRY_DELAY_SECONDS, DEBUG_MODE,
   CRASH_SCREENSHOT_FILE_NAME, LOG_MINIMUM_LEVEL, LOG_FILE_PATH
 EOF
@@ -123,6 +125,10 @@ parse_args() {
         ;;
       --max-email-age)
         MAX_EMAIL_AGE="${2:-}"
+        shift 2
+        ;;
+      --max-search-results)
+        MAX_SEARCH_RESULTS_TO_FETCH="${2:-}"
         shift 2
         ;;
       --page-load-timeout)
@@ -204,6 +210,7 @@ write_appsettings() {
     "username": "${IMAP_USERNAME}",
     "password": "${IMAP_PASSWORD}",
     "maxEmailAge": ${MAX_EMAIL_AGE},
+    "maxSearchResultsToFetch": ${MAX_SEARCH_RESULTS_TO_FETCH},
     "folder": "${IMAP_FOLDER}"
   },
   "debugSettings": {
@@ -256,6 +263,7 @@ main() {
   assert_boolean "${DEBUG_MODE}"
   assert_positive_integer "${IMAP_PORT}" "IMAP port"
   assert_positive_integer "${MAX_EMAIL_AGE}" "max email age"
+  assert_positive_integer "${MAX_SEARCH_RESULTS_TO_FETCH}" "max search results"
   assert_positive_integer "${PAGE_LOAD_TIMEOUT}" "page load timeout"
   assert_positive_integer "${POLL_INTERVAL_SECONDS}" "poll interval"
   assert_positive_integer "${ERROR_RETRY_DELAY_SECONDS}" "error retry delay"
