@@ -13,6 +13,7 @@ IMAP_SERVER="${IMAP_SERVER:-}"
 IMAP_PORT="${IMAP_PORT:-993}"
 IMAP_USERNAME="${IMAP_USERNAME:-}"
 IMAP_PASSWORD="${IMAP_PASSWORD:-}"
+IMAP_FOLDER="${IMAP_FOLDER:-NetflixHousehold}"
 MAX_EMAIL_AGE="${MAX_EMAIL_AGE:-1800}"
 PAGE_LOAD_TIMEOUT="${PAGE_LOAD_TIMEOUT:-90}"
 POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-5}"
@@ -35,6 +36,7 @@ Options:
   --imap-port <value>           IMAP port (default: 993)
   --imap-username <value>       IMAP username
   --imap-password <value>       IMAP password
+  --imap-folder <value>         IMAP folder/label to scan (default: NetflixHousehold)
   --max-email-age <value>       Max email age in seconds (default: 1800)
   --page-load-timeout <value>   Browser page load timeout in seconds (default: 90)
   --poll-interval <value>       Inbox polling interval in seconds (default: 5)
@@ -43,7 +45,7 @@ Options:
   --help                        Show this help
 
 You can also pass values through environment variables:
-  IMAP_SERVER, IMAP_PORT, IMAP_USERNAME, IMAP_PASSWORD,
+  IMAP_SERVER, IMAP_PORT, IMAP_USERNAME, IMAP_PASSWORD, IMAP_FOLDER,
   MAX_EMAIL_AGE, PAGE_LOAD_TIMEOUT, POLL_INTERVAL_SECONDS,
   ERROR_RETRY_DELAY_SECONDS, DEBUG_MODE,
   CRASH_SCREENSHOT_FILE_NAME, LOG_MINIMUM_LEVEL, LOG_FILE_PATH
@@ -113,6 +115,10 @@ parse_args() {
         ;;
       --imap-password)
         IMAP_PASSWORD="${2:-}"
+        shift 2
+        ;;
+      --imap-folder)
+        IMAP_FOLDER="${2:-}"
         shift 2
         ;;
       --max-email-age)
@@ -197,7 +203,8 @@ write_appsettings() {
     "port": ${IMAP_PORT},
     "username": "${IMAP_USERNAME}",
     "password": "${IMAP_PASSWORD}",
-    "maxEmailAge": ${MAX_EMAIL_AGE}
+    "maxEmailAge": ${MAX_EMAIL_AGE},
+    "folder": "${IMAP_FOLDER}"
   },
   "debugSettings": {
     "crashScreenshotFileName": "${CRASH_SCREENSHOT_FILE_NAME}",
@@ -244,6 +251,7 @@ main() {
   prompt_if_empty "IMAP_SERVER" "IMAP server"
   prompt_if_empty "IMAP_USERNAME" "IMAP username"
   prompt_if_empty "IMAP_PASSWORD" "IMAP password" "true"
+  prompt_if_empty "IMAP_FOLDER" "IMAP folder/label"
 
   assert_boolean "${DEBUG_MODE}"
   assert_positive_integer "${IMAP_PORT}" "IMAP port"

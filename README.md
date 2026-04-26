@@ -1,12 +1,12 @@
 # Netflix Household Auto Confirmator
 
-A small service that watches a Gmail/IMAP inbox for Netflix Household update emails and automatically completes the Netflix confirmation flow in a headless browser.
+A small service that watches a configured Gmail/IMAP label for Netflix Household update emails and automatically completes the Netflix confirmation flow in a headless browser.
 
 This fork is optimized for small Ubuntu/DigitalOcean Droplets using Chromium headless and a systemd service.
 
 ## Features
 
-- Connects to Gmail/IMAP and scans recent inbox emails.
+- Connects to Gmail/IMAP and scans only the configured Gmail label/folder.
 - Finds Netflix Household emails with subject `Important: How to update your Netflix household`.
 - Extracts the Netflix confirmation URL from the email body.
 - Opens the URL with Selenium + Chromium headless.
@@ -27,9 +27,9 @@ This fork is optimized for small Ubuntu/DigitalOcean Droplets using Chromium hea
 ## How It Works
 
 1. The service starts Chromium in headless mode.
-2. The service logs into the configured IMAP inbox.
-3. Every `pollIntervalSeconds`, it scans recent inbox messages.
-4. It finds the newest Netflix Household email inside the `maxEmailAge` window.
+2. The service logs into the configured IMAP account.
+3. Every `pollIntervalSeconds`, it searches the configured IMAP folder/label only.
+4. It finds the newest Netflix Household email inside the configured label and `maxEmailAge` window.
 5. It reads the Netflix request timestamp from the email body, for example:
 
 ```text
@@ -89,6 +89,7 @@ sudo ./deploy-droplet.sh \
   --imap-server imap.gmail.com \
   --imap-port 993 \
   --imap-username your-gmail@gmail.com \
+  --imap-folder NetflixHousehold \
   --imap-password 'your-google-app-password' \
   --max-email-age 1800 \
   --page-load-timeout 90 \
@@ -103,7 +104,8 @@ If you do not want the password to appear in shell history, omit `--imap-passwor
 sudo ./deploy-droplet.sh \
   --imap-server imap.gmail.com \
   --imap-port 993 \
-  --imap-username your-gmail@gmail.com
+  --imap-username your-gmail@gmail.com \
+  --imap-folder NetflixHousehold
 ```
 
 ## Update An Existing Droplet Install
@@ -169,7 +171,7 @@ tail -f /opt/netflix-household-confirmator/logfile.log
 Real success:
 
 ```text
-Operation=HouseholdConfirmation,OperationStatus=SUCCESS,Message=The household was successfully confirmed.,ConfirmationStatus=Confirmed,PageHeading=You’ve updated your Netflix household
+Operation=HouseholdConfirmation,OperationStatus=SUCCESS,Message=The household was successfully confirmed.,ConfirmationStatus=Confirmed,PageHeading=YouÃ¢â‚¬â„¢ve updated your Netflix household
 ```
 
 Expired or invalid link:
@@ -223,7 +225,8 @@ Example:
     "port": 993,
     "username": "your-gmail@gmail.com",
     "password": "your-google-app-password",
-    "maxEmailAge": 1800
+    "maxEmailAge": 1800,
+    "folder": "NetflixHousehold"
   },
   "debugSettings": {
     "crashScreenshotFileName": "crash.png",
@@ -248,9 +251,10 @@ sudo systemctl restart netflix-household-confirmator.service
 | Setting | Meaning | Suggested value |
 | --- | --- | --- |
 | `pageLoadTimeout` | Netflix page-load timeout in seconds | `90` |
-| `pollIntervalSeconds` | Delay between inbox scans | `10` to `60` |
+| `pollIntervalSeconds` | Delay between folder scans | `10` to `60` |
 | `errorRetryDelaySeconds` | Delay before retrying after an error | `120` |
-| `maxEmailAge` | Only consider emails newer than this many seconds | `1800` |
+| `maxEmailAge` | Only consider Netflix requests newer than this many seconds | `1800` |
+| `folder` | IMAP folder/Gmail label to scan. No fallback is used. | `NetflixHousehold` |
 | `isDebugMode` | `true` runs a visible browser, `false` runs headless | Use `false` on Droplets |
 | `logFilePath` | Log file location | `/var/log/netflix-household-confirmator/logfile.log` |
 
@@ -267,17 +271,18 @@ journalctl -u netflix-household-confirmator.service -f
 If you only see:
 
 ```text
-Scanned X recent inbox email(s).
+Retrieved X Netflix candidate email(s) from configured IMAP folder: NetflixHousehold=...
 ```
 
 possible causes are:
 
-- The Netflix email is not in the Inbox folder.
-- Gmail grouped the new email into an existing thread and the service could not parse the request timestamp.
+- The Gmail label name in `imapSettings.folder` is wrong.
+- The label is hidden from IMAP in Gmail settings.
+- Your Gmail filter did not apply the label to the new Netflix email.
+- The service could not parse the request timestamp.
 - `maxEmailAge` is too short.
-- Gmail IMAP sync is delayed.
 
-Try increasing `maxEmailAge` to 3600:
+First verify the label name and IMAP visibility in Gmail. If the email is old, try increasing `maxEmailAge` to 3600:
 
 ```bash
 sudo nano /opt/netflix-household-confirmator/appsettings.json

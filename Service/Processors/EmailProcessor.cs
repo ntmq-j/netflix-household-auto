@@ -23,7 +23,6 @@ namespace NetflixHouseholdConfirmator.Service.Processors
     {
         const string HouseholdUpdateSubject = "How to update your Netflix Household";
         const string ConfirmationUrlToken = "UPDATE_HOUSEHOLD_REQUESTED_OTP_CTA";
-        const int MaxFallbackMessagesToScan = 100;
         const int MaxSearchResultsToFetch = 50;
         static readonly IDictionary<string, int> EnglishMonthNumbers = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         {
@@ -179,7 +178,7 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             logger.Info(
                 MyOperation.ListenForConfirmationRequests,
                 OperationStatus.InProgress,
-                $"Retrieved {emails.Count} Netflix candidate email(s) across IMAP folder(s): {retrievedEmails.FolderCounts}.",
+                $"Retrieved {emails.Count} Netflix candidate email(s) from configured IMAP folder: {retrievedEmails.FolderCounts}.",
                 [
                     new(MyLogInfoKey.InboxCount, imapClient.Inbox.Count),
                     new(MyLogInfoKey.FolderCounts, retrievedEmails.FolderCounts)
@@ -497,58 +496,34 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             List<string> folderCounts = [];
             HashSet<string> seenEmailIds = [];
 
-            foreach (IMailFolder folder in GetScanFolders())
+            IMailFolder folder = GetConfiguredFolder();
+
+            if (!folder.IsOpen)
             {
-                if (!folder.IsOpen)
-                {
-                    folder.Open(FolderAccess.ReadOnly);
-                }
-
-                RefreshFolder(folder);
-
-                folderCounts.Add($"{folder.FullName}={folder.Count}");
-
-                IList<MimeMessage> folderEmails = SearchNetflixEmails(folder).ToList();
-                folderCounts.Add($"{folder.FullName}:search={folderEmails.Count}");
-
-                AddUniqueEmails(emails, folderEmails, seenEmailIds);
+                folder.Open(FolderAccess.ReadOnly);
             }
+
+            RefreshFolder(folder);
+
+            folderCounts.Add($"{folder.FullName}={folder.Count}");
+
+            IList<MimeMessage> folderEmails = SearchNetflixEmails(folder).ToList();
+            folderCounts.Add($"{folder.FullName}:search={folderEmails.Count}");
+
+            AddUniqueEmails(emails, folderEmails, seenEmailIds);
 
             return new RetrievedEmails(emails, string.Join(",", folderCounts));
         }
 
         IEnumerable<MimeMessage> SearchNetflixEmails(IMailFolder folder)
         {
-            try
-            {
-                IList<UniqueId> emailIds = folder.Search(SearchQuery.SubjectContains("Netflix household"));
+            IList<UniqueId> emailIds = folder.Search(SearchQuery.SubjectContains("Netflix household"));
 
-                return emailIds
-                    .Reverse()
-                    .Take(MaxSearchResultsToFetch)
-                    .Select(emailId => folder.GetMessage(emailId))
-                    .ToList();
-            }
-            catch (Exception exception)
-            {
-                logger.Error(
-                    MyOperation.ListenForConfirmationRequests,
-                    OperationStatus.Failure,
-                    $"Failed to search folder {folder.FullName}. Falling back to the latest {MaxFallbackMessagesToScan} message(s).",
-                    exception);
-
-                return RetrieveLatestFolderEmails(folder);
-            }
-        }
-
-        IEnumerable<MimeMessage> RetrieveLatestFolderEmails(IMailFolder folder)
-        {
-            int firstMessageIndex = Math.Max(0, folder.Count - MaxFallbackMessagesToScan);
-
-            for(int i = folder.Count - 1; i >= firstMessageIndex; i--)
-            {
-                yield return folder.GetMessage(i);
-            }
+            return emailIds
+                .Reverse()
+                .Take(MaxSearchResultsToFetch)
+                .Select(emailId => folder.GetMessage(emailId))
+                .ToList();
         }
 
         static void AddUniqueEmails(
@@ -569,32 +544,41 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             }
         }
 
-        IEnumerable<IMailFolder> GetScanFolders()
+        IMailFolder GetConfiguredFolder()
         {
-            yield return imapClient.Inbox;
+            IMailFolder folder = TryFindFolderByName(imapSettings.Folder);
 
-            IMailFolder allMailFolder = TryGetAllMailFolder();
+            if (folder is null)
+            {
+                throw new InvalidOperationException(
+                    $"The configured IMAP folder '{imapSettings.Folder}' was not found. Check the Gmail label name and IMAP label visibility.");
+            }
 
-            if (allMailFolder is not null &&
-                !string.Equals(allMailFolder.FullName, imapClient.Inbox.FullName, StringComparison.OrdinalIgnoreCase))
-            {
-                yield return allMailFolder;
-            }
-        }
-
-        IMailFolder TryGetAllMailFolder()
-        {
-            try
-            {
-                return imapClient.GetFolder(SpecialFolder.All);
-            }
-            catch (Exception)
-            {
-                return TryFindFolderByName("All Mail");
-            }
+            return folder;
         }
 
         IMailFolder TryFindFolderByName(string folderName)
+        {
+            if (string.IsNullOrWhiteSpace(folderName))
+            {
+                return null;
+            }
+
+            return TryFindSpecialOrRootFolder(folderName) ??
+                   TryFindPersonalFolderByName(folderName);
+        }
+
+        IMailFolder TryFindSpecialOrRootFolder(string folderName)
+        {
+            if (folderName.Equals("INBOX", StringComparison.OrdinalIgnoreCase))
+            {
+                return imapClient.Inbox;
+            }
+
+            return null;
+        }
+
+        IMailFolder TryFindPersonalFolderByName(string folderName)
         {
             foreach (FolderNamespace folderNamespace in imapClient.PersonalNamespaces)
             {
@@ -612,9 +596,7 @@ namespace NetflixHouseholdConfirmator.Service.Processors
 
         IMailFolder FindFolderByName(IMailFolder folder, string folderName)
         {
-            if (folder.Name.Equals(folderName, StringComparison.OrdinalIgnoreCase) ||
-                folder.FullName.EndsWith($"/{folderName}", StringComparison.OrdinalIgnoreCase) ||
-                folder.FullName.EndsWith($".{folderName}", StringComparison.OrdinalIgnoreCase))
+            if (IsFolderNameMatch(folder, folderName))
             {
                 return folder;
             }
@@ -631,6 +613,12 @@ namespace NetflixHouseholdConfirmator.Service.Processors
 
             return null;
         }
+
+        static bool IsFolderNameMatch(IMailFolder folder, string folderName)
+            => folder.Name.Equals(folderName, StringComparison.OrdinalIgnoreCase) ||
+               folder.FullName.Equals(folderName, StringComparison.OrdinalIgnoreCase) ||
+               folder.FullName.EndsWith($"/{folderName}", StringComparison.OrdinalIgnoreCase) ||
+               folder.FullName.EndsWith($".{folderName}", StringComparison.OrdinalIgnoreCase);
 
         void RefreshFolder(IMailFolder folder)
         {

@@ -213,6 +213,12 @@ namespace NetflixHouseholdConfirmator
                 throw new InvalidOperationException("The IMAP max email age must be greater than 0 seconds.");
             }
 
+            if (string.IsNullOrWhiteSpace(imapSettings.Folder))
+            {
+                throw new InvalidOperationException(
+                    "The IMAP folder is not configured. Set ImapSettings:Folder to the Gmail label/folder that contains Netflix Household emails.");
+            }
+
             if (botSettings.PageLoadTimeout <= 0)
             {
                 throw new InvalidOperationException("Page load timeout must be greater than 0 seconds.");

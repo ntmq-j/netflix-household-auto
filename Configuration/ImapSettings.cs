@@ -11,5 +11,7 @@ namespace NetflixHouseholdConfirmator.Configuration
         public string Password { get; set; }
 
         public int MaxEmailAge { get; set; }
+
+        public string Folder { get; set; }
     }
 }
