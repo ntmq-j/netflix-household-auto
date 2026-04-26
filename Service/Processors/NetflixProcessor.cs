@@ -1,19 +1,16 @@
 using System;
 using NetflixHouseholdConfirmator.Logging;
 using NuciLog.Core;
-using NuciWeb;
-using NuciWeb.Automation;
 using OpenQA.Selenium;
+using OpenQA.Selenium.Support.UI;
 
 namespace NetflixHouseholdConfirmator.Service.Processors
 {
     public sealed class NetflixProcessor(
         IWebDriver webDriver,
-        IWebProcessor webProcessor,
         ILogger logger) : INetflixProcessor
     {
         readonly IWebDriver webDriver = webDriver;
-        readonly IWebProcessor webProcessor = webProcessor;
         readonly ILogger logger = logger;
 
         public bool ConfirmHousehold(string confirmationUrl)
@@ -37,15 +34,17 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             {
                 webDriver.Navigate().GoToUrl(confirmationUrl);
 
-                string confirmButtonSelector = Select.ByXPath(@"//button[@data-uia='set-primary-location-action']");
-                string locationDetailsSelector = Select.ByXPath(@"//div[@data-uia='location-details']");
+                By confirmButtonSelector = By.XPath(@"//button[@data-uia='set-primary-location-action']");
+                By locationDetailsSelector = By.XPath(@"//div[@data-uia='location-details']");
 
-                webProcessor.WaitForAnyElementToBeVisible(confirmButtonSelector, locationDetailsSelector);
+                IWebElement visibleElement = WaitForAnyElementToBeVisible(
+                    confirmButtonSelector,
+                    locationDetailsSelector);
 
-                if (!webProcessor.IsElementVisible(locationDetailsSelector))
+                if (TryFindVisibleElement(locationDetailsSelector) is null)
                 {
-                    webProcessor.Click(confirmButtonSelector);
-                    webProcessor.Wait(5000);
+                    visibleElement.Click();
+                    WaitForElementToBeVisible(locationDetailsSelector);
                 }
 
                 logger.Info(
@@ -66,6 +65,50 @@ namespace NetflixHouseholdConfirmator.Service.Processors
                 return false;
             }
         }
+
+        IWebElement WaitForAnyElementToBeVisible(params By[] selectors)
+        {
+            WebDriverWait wait = CreateWait();
+
+            return wait.Until(_ =>
+            {
+                foreach (By selector in selectors)
+                {
+                    IWebElement element = TryFindVisibleElement(selector);
+
+                    if (element is not null)
+                    {
+                        return element;
+                    }
+                }
+
+                return null;
+            });
+        }
+
+        IWebElement WaitForElementToBeVisible(By selector)
+            => CreateWait().Until(_ => TryFindVisibleElement(selector));
+
+        IWebElement TryFindVisibleElement(By selector)
+        {
+            try
+            {
+                IWebElement element = webDriver.FindElement(selector);
+
+                return element.Displayed ? element : null;
+            }
+            catch (NoSuchElementException)
+            {
+                return null;
+            }
+            catch (StaleElementReferenceException)
+            {
+                return null;
+            }
+        }
+
+        WebDriverWait CreateWait()
+            => new(webDriver, TimeSpan.FromSeconds(30));
 
         static bool IsValidNetflixConfirmationUrl(string confirmationUrl)
         {
