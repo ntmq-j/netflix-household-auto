@@ -20,6 +20,13 @@ namespace NetflixHouseholdConfirmator.Service.Processors
     {
         const string HouseholdUpdateSubject = "How to update your Netflix Household";
         const string ConfirmationUrlToken = "UPDATE_HOUSEHOLD_REQUESTED_OTP_CTA";
+        static readonly string[] HouseholdUrlHints =
+        [
+            "household",
+            "update-household",
+            "set-primary-location",
+            ConfirmationUrlToken
+        ];
 
         readonly ImapSettings imapSettings = imapSettings;
         readonly ILogger logger = logger;
@@ -157,13 +164,21 @@ namespace NetflixHouseholdConfirmator.Service.Processors
                     continue;
                 }
 
+                // Move cursor forward as soon as we pick up a new matching email
+                // so one malformed message does not get retried forever.
+                lastConfirmationEmailDateTime = emailDateTime;
+
                 string confirmationUrl = ExtractConfirmationUrlFromEmail(email);
 
                 if (!string.IsNullOrWhiteSpace(confirmationUrl))
                 {
-                    lastConfirmationEmailDateTime = emailDateTime;
                     return confirmationUrl;
                 }
+
+                logger.Error(
+                    MyOperation.ListenForConfirmationRequests,
+                    OperationStatus.Failure,
+                    $"Matched a Netflix household email but could not extract a valid confirmation URL. Subject: {email.Subject}");
             }
 
             return null;
@@ -171,46 +186,157 @@ namespace NetflixHouseholdConfirmator.Service.Processors
 
         private string ExtractConfirmationUrlFromEmail(MimeMessage email)
         {
-            string content = email.HtmlBody ?? email.TextBody;
+            string content = $"{email.HtmlBody}\n{email.TextBody}";
 
             if (string.IsNullOrWhiteSpace(content))
             {
                 return null;
             }
 
-            MatchCollection matches = Regex.Matches(
+            IEnumerable<string> candidates = ExtractUrlCandidates(content);
+            List<string> trustedUrls = [];
+
+            foreach (string candidate in candidates)
+            {
+                if (TryNormaliseNetflixUrl(candidate, out string netflixUrl))
+                {
+                    trustedUrls.Add(netflixUrl);
+                }
+            }
+
+            if (trustedUrls.Count == 0)
+            {
+                return null;
+            }
+
+            string targetedUrl = trustedUrls.FirstOrDefault(IsLikelyHouseholdConfirmationUrl);
+
+            return targetedUrl ?? trustedUrls.First();
+        }
+
+        static IEnumerable<string> ExtractUrlCandidates(string content)
+        {
+            MatchCollection hrefMatches = Regex.Matches(
                 content,
                 "href\\s*=\\s*[\"'](?<url>https://[^\"']+)[\"']",
                 RegexOptions.IgnoreCase);
 
-            foreach (Match match in matches)
+            foreach (Match match in hrefMatches)
             {
-                string candidate = WebUtility.HtmlDecode(match.Groups["url"].Value);
+                string hrefValue = WebUtility.HtmlDecode(match.Groups["url"].Value).Trim();
 
-                if (!candidate.Contains(ConfirmationUrlToken, StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrWhiteSpace(hrefValue))
                 {
-                    continue;
+                    yield return hrefValue;
                 }
-
-                if (!Uri.TryCreate(candidate, UriKind.Absolute, out Uri uri))
-                {
-                    continue;
-                }
-
-                if (!uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                if (!IsTrustedNetflixDomain(uri.Host))
-                {
-                    continue;
-                }
-
-                return uri.ToString();
             }
 
-            return null;
+            MatchCollection plainTextMatches = Regex.Matches(
+                WebUtility.HtmlDecode(content),
+                @"https://[^\s""'<>)]+",
+                RegexOptions.IgnoreCase);
+
+            foreach (Match match in plainTextMatches)
+            {
+                string textUrl = match.Value.Trim().TrimEnd('.', ',', ';', ')', ']', '"', '\'');
+
+                if (!string.IsNullOrWhiteSpace(textUrl))
+                {
+                    yield return textUrl;
+                }
+            }
+        }
+
+        static bool TryNormaliseNetflixUrl(string candidateUrl, out string netflixUrl)
+        {
+            netflixUrl = null;
+
+            if (string.IsNullOrWhiteSpace(candidateUrl))
+            {
+                return false;
+            }
+
+            if (TryExtractTrustedNetflixUrl(candidateUrl, out netflixUrl))
+            {
+                return true;
+            }
+
+            string decoded = WebUtility.UrlDecode(candidateUrl);
+
+            if (!string.Equals(decoded, candidateUrl, StringComparison.Ordinal) &&
+                TryExtractTrustedNetflixUrl(decoded, out netflixUrl))
+            {
+                return true;
+            }
+
+            return false;
+        }
+
+        static bool TryExtractTrustedNetflixUrl(string url, out string netflixUrl)
+        {
+            netflixUrl = null;
+
+            if (!Uri.TryCreate(url, UriKind.Absolute, out Uri uri))
+            {
+                return false;
+            }
+
+            if (!uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (IsTrustedNetflixDomain(uri.Host))
+            {
+                netflixUrl = uri.ToString();
+                return true;
+            }
+
+            string query = uri.Query.TrimStart('?');
+
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return false;
+            }
+
+            foreach (string queryPair in query.Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                string[] kv = queryPair.Split('=', 2);
+
+                if (kv.Length != 2)
+                {
+                    continue;
+                }
+
+                string queryValue = WebUtility.UrlDecode(kv[1]);
+
+                if (!Uri.TryCreate(queryValue, UriKind.Absolute, out Uri nestedUri))
+                {
+                    continue;
+                }
+
+                if (!nestedUri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (!IsTrustedNetflixDomain(nestedUri.Host))
+                {
+                    continue;
+                }
+
+                netflixUrl = nestedUri.ToString();
+                return true;
+            }
+
+            return false;
+        }
+
+        static bool IsLikelyHouseholdConfirmationUrl(string url)
+        {
+            string normalisedUrl = url.ToLowerInvariant();
+
+            return HouseholdUrlHints.Any(hint => normalisedUrl.Contains(hint.ToLowerInvariant(), StringComparison.Ordinal));
         }
 
         private IEnumerable<MimeMessage> RetrieveRecentEmails()
