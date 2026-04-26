@@ -22,6 +22,7 @@ namespace NetflixHouseholdConfirmator.Service.Processors
     {
         const string HouseholdUpdateSubject = "How to update your Netflix Household";
         const string ConfirmationUrlToken = "UPDATE_HOUSEHOLD_REQUESTED_OTP_CTA";
+        const int MaxInboxMessagesToScan = 100;
         static readonly IDictionary<string, int> EnglishMonthNumbers = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
         {
             ["January"] = 1,
@@ -177,12 +178,20 @@ namespace NetflixHouseholdConfirmator.Service.Processors
                 OperationStatus.InProgress,
                 $"Scanned {emails.Count} recent inbox email(s).");
 
-            HouseholdEmailCandidate candidate = emails
+            List<HouseholdEmailCandidate> householdEmailCandidates = emails
                 .Where(IsPotentialNetflixHouseholdEmail)
                 .Select(CreateHouseholdEmailCandidate)
+                .Where(IsWithinConfiguredAgeWindow)
                 .OrderByDescending(candidate => candidate.SortDate)
                 .ThenByDescending(candidate => candidate.Email.Date.UtcDateTime)
-                .FirstOrDefault();
+                .ToList();
+
+            logger.Info(
+                MyOperation.ListenForConfirmationRequests,
+                OperationStatus.InProgress,
+                $"Matched {householdEmailCandidates.Count} Netflix household email candidate(s) inside the configured age window.");
+
+            HouseholdEmailCandidate candidate = householdEmailCandidates.FirstOrDefault();
 
             if (candidate is null)
             {
@@ -485,15 +494,11 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             }
 
             IList<MimeMessage> emails = [];
+            int firstMessageIndex = Math.Max(0, inbox.Count - MaxInboxMessagesToScan);
 
-            for(int i = inbox.Count - 1; i >= 0; i--)
+            for(int i = inbox.Count - 1; i >= firstMessageIndex; i--)
             {
                 var email = inbox.GetMessage(i);
-
-                if ((DateTime.UtcNow - email.Date.UtcDateTime).TotalSeconds > imapSettings.MaxEmailAge)
-                {
-                    break;
-                }
 
                 emails.Add(email);
             }
@@ -539,6 +544,14 @@ namespace NetflixHouseholdConfirmator.Service.Processors
             => !string.IsNullOrWhiteSpace(domain) &&
                (domain.Equals("netflix.com", StringComparison.OrdinalIgnoreCase) ||
                domain.EndsWith(".netflix.com", StringComparison.OrdinalIgnoreCase));
+
+        bool IsWithinConfiguredAgeWindow(HouseholdEmailCandidate candidate)
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            double requestAgeSeconds = (now - candidate.SortDate.ToUniversalTime()).TotalSeconds;
+
+            return requestAgeSeconds <= imapSettings.MaxEmailAge;
+        }
 
         static string NormaliseWhitespace(string value)
             => string.IsNullOrWhiteSpace(value)
