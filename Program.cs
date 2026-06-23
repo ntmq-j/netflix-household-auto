@@ -102,6 +102,7 @@ namespace NetflixHouseholdConfirmator
         static IWebDriver InitialiseChromeWebDriver()
         {
             string driverPath = GetFirstExistingPath(
+                "/snap/chromium/current/usr/lib/chromium-browser/chromedriver",
                 "/usr/local/bin/chromedriver",
                 "/usr/bin/chromedriver");
 

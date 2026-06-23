@@ -188,8 +188,10 @@ install_browser_stack() {
     snap install chromium
   fi
 
-  if [[ -x "/snap/bin/chromium.chromedriver" ]] && [[ ! -x "/usr/local/bin/chromedriver" ]]; then
-    ln -sf /snap/bin/chromium.chromedriver /usr/local/bin/chromedriver
+  local chromium_driver="/snap/chromium/current/usr/lib/chromium-browser/chromedriver"
+
+  if [[ -x "${chromium_driver}" ]]; then
+    ln -sf "${chromium_driver}" /usr/local/bin/chromedriver
   fi
 }
 

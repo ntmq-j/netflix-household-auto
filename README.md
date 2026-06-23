@@ -304,13 +304,23 @@ PageHeading=This link is no longer valid
 
 This means Netflix says the link is expired or invalid. Request a new confirmation email.
 
-### ChromeDriver error: `unknown flag port`
+### ChromeDriver error: missing driver or `unknown flag port`
 
-Find the snap Chromium ChromeDriver and symlink it:
+Use the stable snap `current` path. Do not symlink to a revision-specific path such as `/snap/chromium/3423/...`, because snap updates remove old revisions.
 
 ```bash
-DRV="$(sudo find /snap/chromium -type f -name chromedriver 2>/dev/null | head -n 1)"
+DRV="/snap/chromium/current/usr/lib/chromium-browser/chromedriver"
 echo "DRV=$DRV"
+sudo ln -sf "$DRV" /usr/local/bin/chromedriver
+/usr/local/bin/chromedriver --version
+sudo systemctl restart netflix-household-confirmator.service
+```
+
+If the stable path does not exist, refresh Chromium and recreate the link:
+
+```bash
+sudo snap install chromium || sudo snap refresh chromium
+DRV="/snap/chromium/current/usr/lib/chromium-browser/chromedriver"
 sudo ln -sf "$DRV" /usr/local/bin/chromedriver
 /usr/local/bin/chromedriver --version
 sudo systemctl restart netflix-household-confirmator.service
